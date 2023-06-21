@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_aux::prelude::*;
 
+use crate::dash;
+
 // Generated with https://transform.tools/json-to-rust-serde
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -224,12 +226,26 @@ impl InitialPlayerResponse {
             .unwrap_or_default();
 
         // Download the DASH manifest if it exists
-        if let Some(dashUrl) = self
+        if let Some(dash_url) = self
             .streaming_data
             .as_ref()
             .and_then(|sd| sd.dash_manifest_url.as_ref())
         {
-            let text = Self::fetch_text(dashUrl).await.unwrap();
+            let representations = Self::fetch_text(dash_url)
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|manifest| dash::parse_manifest(&manifest).map_err(|e| e.to_string()));
+
+            match representations {
+                Err(e) => println!("Error parsing DASH manifest: {}", e),
+                Ok(representations) => urls.extend(representations.iter().filter_map(|r| {
+                    if let Some(base_url) = r.base_url.as_ref() {
+                        Some((r.id, base_url.clone()))
+                    } else {
+                        None
+                    }
+                })),
+            }
         }
 
         urls
