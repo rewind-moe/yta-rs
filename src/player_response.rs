@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_aux::prelude::*;
@@ -87,6 +89,7 @@ pub struct AdaptiveFormat {
     pub url: String,
     pub mime_type: String,
     pub bitrate: i64,
+    pub target_duration_sec: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -179,6 +182,60 @@ pub fn get_initial_player_response(
     serde_json::from_str(ipr_str).map_err(PlayerResponseError::ParseInitialPlayerResponse)
 }
 
+impl InitialPlayerResponse {
+    pub fn is_usable(&self) -> bool {
+        self.video_details.video_id != ""
+            && self
+                .playability_status
+                .live_streamability
+                .as_ref()
+                .map(|ls| ls.live_streamability_renderer.video_id != "")
+                .unwrap_or(false)
+            && self.playability_status.status == Status::Ok
+            && self
+                .microformat
+                .player_microformat_renderer
+                .live_broadcast_details
+                .is_live_now
+    }
+
+    pub fn target_duration(&self) -> Option<f64> {
+        self.streaming_data
+            .as_ref()?
+            .adaptive_formats
+            .first()?
+            .target_duration_sec
+    }
+
+    async fn fetch_text(url: &str) -> Result<String, reqwest::Error> {
+        reqwest::get(url).await?.text().await
+    }
+
+    pub async fn get_download_urls(&self) -> HashMap<i64, String> {
+        let mut urls = self
+            .streaming_data
+            .as_ref()
+            .map(|sd| {
+                sd.adaptive_formats
+                    .iter()
+                    .map(|af| (af.itag, af.url.clone()))
+                    .collect::<HashMap<_, _>>()
+            })
+            .unwrap_or_default();
+
+        // Download the DASH manifest if it exists
+        if let Some(dashUrl) = self
+            .streaming_data
+            .as_ref()
+            .and_then(|sd| sd.dash_manifest_url.as_ref())
+        {
+            let text = Self::fetch_text(dashUrl).await.unwrap();
+        }
+
+        urls
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -188,8 +245,17 @@ mod tests {
     #[test]
     fn ipr_str() {
         let test_str = r#"<script>var ytInitialPlayerResponse = {"response": "test"};</script>"#;
-        let result = get_ipr_str(test_str).unwrap();
+        let result = get_ipr_str(test_str).expect("Could not find IPR");
         assert_eq!(result, r#"{"response": "test"}"#);
+
+        let test_str = r#"<script>var ytInitialPlayerResponse = {"#;
+        assert!(get_ipr_str(test_str).is_none());
+
+        let test_str = r#"<script>var ytInitialPlayerResponse = "#;
+        assert!(get_ipr_str(test_str).is_none());
+
+        let test_str = r#"<script>var ytInitialPlayerResponse ="#;
+        assert!(get_ipr_str(test_str).is_none());
     }
 
     fn get_test_html(fname: &str) -> String {
