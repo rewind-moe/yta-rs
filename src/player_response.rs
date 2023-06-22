@@ -125,7 +125,7 @@ pub struct PlayerMicroformatRenderer {
     pub thumbnail: Thumbnail,
     pub owner_profile_url: String,
     pub publish_date: String,
-    pub live_broadcast_details: LiveBroadcastDetails,
+    pub live_broadcast_details: Option<LiveBroadcastDetails>,
     pub upload_date: String,
 }
 
@@ -198,7 +198,9 @@ impl InitialPlayerResponse {
                 .microformat
                 .player_microformat_renderer
                 .live_broadcast_details
-                .is_live_now
+                .as_ref()
+                .map(|lbd| lbd.is_live_now)
+                .unwrap_or(false)
     }
 
     pub fn target_duration(&self) -> Option<f64> {
@@ -213,42 +215,28 @@ impl InitialPlayerResponse {
         reqwest::get(url).await?.text().await
     }
 
-    pub async fn get_download_urls(&self) -> HashMap<i64, String> {
-        let mut urls = self
-            .streaming_data
-            .as_ref()
-            .map(|sd| {
-                sd.adaptive_formats
-                    .iter()
-                    .map(|af| (af.itag, af.url.clone()))
-                    .collect::<HashMap<_, _>>()
-            })
-            .unwrap_or_default();
+    pub fn get_adaptive_formats(&self) -> Option<HashMap<i64, String>> {
+        Some(
+            self.streaming_data
+                .as_ref()?
+                .adaptive_formats
+                .iter()
+                .map(|af| (af.itag, af.url.clone()))
+                .collect(),
+        )
+    }
 
-        // Download the DASH manifest if it exists
-        if let Some(dash_url) = self
+    pub async fn get_dash_representations(&self) -> Result<dash::Manifest, String> {
+        let dash_url = self
             .streaming_data
             .as_ref()
             .and_then(|sd| sd.dash_manifest_url.as_ref())
-        {
-            let representations = Self::fetch_text(dash_url)
-                .await
-                .map_err(|e| e.to_string())
-                .and_then(|manifest| dash::parse_manifest(&manifest).map_err(|e| e.to_string()));
+            .ok_or("No DASH manifest URL found")?;
 
-            match representations {
-                Err(e) => println!("Error parsing DASH manifest: {}", e),
-                Ok(representations) => urls.extend(representations.iter().filter_map(|r| {
-                    if let Some(base_url) = r.base_url.as_ref() {
-                        Some((r.id, base_url.clone()))
-                    } else {
-                        None
-                    }
-                })),
-            }
-        }
-
-        urls
+        Self::fetch_text(dash_url)
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|manifest| dash::parse_manifest(&manifest).map_err(|e| e.to_string()))
     }
 }
 
