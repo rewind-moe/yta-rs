@@ -18,3 +18,13 @@ serde_json = "1.0.96"
 serde-aux = "4.2.0"
 chrono = { version = "0.4.26", features = ["serde"] }
 quick-xml = "0.29.0"
+reqwest_cookie_store = "0.6.0"
+reqwest-retry = "0.2.2"
+reqwest-middleware = "0.2.2"
+futures = "0.3.28"
+tokio-stream = "0.1.14"
+
+[profile.release]
+lto = true
+strip = true
+opt-level = 3

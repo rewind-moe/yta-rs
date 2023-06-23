@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_aux::prelude::*;
 
-use crate::dash;
+use crate::{dash, util};
 
 // Generated with https://transform.tools/json-to-rust-serde
 
@@ -211,10 +211,6 @@ impl InitialPlayerResponse {
             .target_duration_sec
     }
 
-    async fn fetch_text(url: &str) -> Result<String, reqwest::Error> {
-        reqwest::get(url).await?.text().await
-    }
-
     pub fn get_adaptive_formats(&self) -> Option<HashMap<i64, String>> {
         Some(
             self.streaming_data
@@ -226,17 +222,21 @@ impl InitialPlayerResponse {
         )
     }
 
-    pub async fn get_dash_representations(&self) -> Result<dash::Manifest, String> {
+    pub async fn get_dash_representations(
+        &self,
+        client: &util::HttpClient,
+    ) -> Result<dash::Manifest, Box<dyn std::error::Error>> {
         let dash_url = self
             .streaming_data
             .as_ref()
             .and_then(|sd| sd.dash_manifest_url.as_ref())
             .ok_or("No DASH manifest URL found")?;
 
-        Self::fetch_text(dash_url)
+        client
+            .fetch_text(dash_url)
             .await
-            .map_err(|e| e.to_string())
-            .and_then(|manifest| dash::parse_manifest(&manifest).map_err(|e| e.to_string()))
+            .map_err(|e| e.into())
+            .and_then(|manifest| dash::parse_manifest(&manifest).map_err(|e| e.into()))
     }
 }
 
