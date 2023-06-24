@@ -72,11 +72,11 @@ impl IndexPlaylist {
         let (fname_playlist_audio, fname_playlist_video) = (
             Path::new(&path_playlist_audio)
                 .file_name()
-                .unwrap()
+                .expect("should never happen")
                 .to_string_lossy(),
             Path::new(&path_playlist_video)
                 .file_name()
-                .unwrap()
+                .expect("should never happen")
                 .to_string_lossy(),
         );
 

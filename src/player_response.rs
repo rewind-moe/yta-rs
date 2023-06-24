@@ -14,8 +14,8 @@ pub struct InitialPlayerResponse {
     pub response_context: ResponseContext,
     pub playability_status: PlayabilityStatus,
     pub streaming_data: Option<StreamingData>,
-    pub video_details: VideoDetails,
-    pub microformat: Microformat,
+    pub video_details: Option<VideoDetails>,
+    pub microformat: Option<Microformat>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -44,6 +44,7 @@ pub enum Status {
     Ok,
     LiveStreamOffline,
     Unplayable,
+    LoginRequired,
     Error,
 }
 
@@ -190,7 +191,11 @@ impl InitialPlayerResponse {
     }
 
     pub fn is_usable(&self) -> bool {
-        self.video_details.video_id != ""
+        self.video_details
+            .as_ref()
+            .map(|v| v.video_id.clone())
+            .unwrap_or("".into())
+            != ""
             && self
                 .playability_status
                 .live_streamability
@@ -200,8 +205,12 @@ impl InitialPlayerResponse {
             && self.playability_status.status == Status::Ok
             && self
                 .microformat
-                .player_microformat_renderer
-                .live_broadcast_details
+                .as_ref()
+                .and_then(|mf| {
+                    mf.player_microformat_renderer
+                        .live_broadcast_details
+                        .clone()
+                })
                 .as_ref()
                 .map(|lbd| lbd.is_live_now)
                 .unwrap_or(false)
@@ -279,13 +288,11 @@ mod tests {
     fn ipr_live() {
         let html = get_test_html("watchpage_live.html");
         let ipr = InitialPlayerResponse::from_html(&html).expect("Could not parse IPR");
+        let details = ipr.video_details.unwrap();
 
-        assert_eq!(ipr.video_details.is_live, true, "Video is not live");
-        assert_eq!(ipr.video_details.length_seconds, 0, "Video length is not 0");
-        assert_eq!(
-            ipr.video_details.view_count, 210_943_922,
-            "View count is not correct"
-        );
+        assert_eq!(details.is_live, true, "Video is not live");
+        assert_eq!(details.length_seconds, 0, "Video length is not 0");
+        assert_eq!(details.view_count, 210_943_922, "View count is not correct");
         assert!(
             ipr.playability_status
                 .live_streamability
@@ -301,15 +308,16 @@ mod tests {
     fn ipr_scheduled() {
         let html = get_test_html("watchpage_scheduled.html");
         let ipr = InitialPlayerResponse::from_html(&html).expect("Could not parse IPR");
+        let details = ipr.video_details.unwrap();
 
-        assert_eq!(ipr.video_details.is_live, false, "Video is live");
+        assert_eq!(details.is_live, false, "Video is live");
         assert_eq!(
             ipr.playability_status.status,
             Status::LiveStreamOffline,
             "Playability status is not LiveStreamOffline"
         );
-        assert_eq!(ipr.video_details.length_seconds, 0, "Video length is not 0");
-        assert_eq!(ipr.video_details.view_count, 0, "View count is not correct");
+        assert_eq!(details.length_seconds, 0, "Video length is not 0");
+        assert_eq!(details.view_count, 0, "View count is not correct");
         assert_eq!(
             ipr.playability_status
                 .live_streamability

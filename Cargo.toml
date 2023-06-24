@@ -6,10 +6,18 @@ edition = "2021"
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "yta-rs"
+path = "src/main.rs"
+
 [dependencies]
 log = "0.4"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.11", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "stream",
+] }
 async-trait = "0.1"
 thiserror = "1"
 regex = "1.8.3"
