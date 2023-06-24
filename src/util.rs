@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use reqwest_cookie_store::CookieStoreMutex;
 use reqwest_middleware::ClientWithMiddleware;
@@ -66,33 +66,40 @@ impl HttpClient {
 
 pub async fn download_av_segment(
     client: &HttpClient,
+    outdir: &Path,
     audio: &Representation,
     video: &Representation,
     seq: i64,
 ) -> Result<(String, String), DownloadError> {
     let (url_audio, url_video) = (audio.get_url(seq), video.get_url(seq));
     let (fname_audio, fname_video) = (
-        format!("seq_{}.a{}.mp4", seq, audio.id),
-        format!("seq_{}.v{}.mp4", seq, video.id),
+        format!("seq_{:.6}.a{}.mp4", seq, audio.id),
+        format!("seq_{:.6}.v{}.mp4", seq, video.id),
     );
 
     let dl_audio = async {
-        if let Ok(res) = tokio::fs::try_exists(&fname_audio).await {
+        let path_audio = outdir.join(&fname_audio);
+        if let Ok(res) = tokio::fs::try_exists(&path_audio).await {
             if res {
                 return Ok(());
             }
         }
 
-        client.download_file(&url_audio, &fname_audio).await
+        client
+            .download_file(&url_audio, &path_audio.to_string_lossy())
+            .await
     };
     let dl_video = async {
-        if let Ok(res) = tokio::fs::try_exists(&fname_video).await {
+        let path_video = outdir.join(&fname_video);
+        if let Ok(res) = tokio::fs::try_exists(&path_video).await {
             if res {
                 return Ok(());
             }
         }
 
-        client.download_file(&url_video, &fname_video).await
+        client
+            .download_file(&url_video, &path_video.to_string_lossy())
+            .await
     };
     try_join!(dl_audio, dl_video)?;
 

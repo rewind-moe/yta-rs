@@ -1,0 +1,37 @@
+<html>
+  <head>
+    <title>yta-rs</title>
+  </head>
+
+  <body>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.6/hls.min.js"
+      integrity="sha512-zwW63/JER0eBVaDHSUPx0MEWQJmDMhDppeoAzOVY8TplfXNKT68yLwqbE6i+AM8YY47aGiI0Gb+/YGU1unorHg=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    ></script>
+
+    <video height="600" id="video" controls></video>
+
+    <script>
+      const srcUrl = "index.m3u8";
+      var video = document.getElementById("video");
+      if (Hls.isSupported()) {
+        var hls = new Hls({
+          debug: true,
+        });
+        hls.loadSource(srcUrl);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MEDIA_ATTACHED, function () {
+          video.muted = true;
+          video.play();
+        });
+      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = srcUrl;
+        video.addEventListener("canplay", function () {
+          video.play();
+        });
+      }
+    </script>
+  </body>
+</html>

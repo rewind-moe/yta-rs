@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use tokio::{
     fs::File,
@@ -52,6 +52,12 @@ pub struct IndexPlaylist {
     pub playlist_video: LivePlaylist,
 }
 
+fn replace_extension(fname: &str, ext: &str) -> String {
+    let path = Path::new(fname).to_path_buf();
+    let path = path.with_extension(ext);
+    String::from(path.to_string_lossy())
+}
+
 impl IndexPlaylist {
     pub async fn new(
         fname: &str,
@@ -61,9 +67,18 @@ impl IndexPlaylist {
     ) -> io::Result<Self> {
         let mut file = File::create(fname).await?;
 
-        let fname_without_ext = &fname[..fname.len() - fname.rfind('.').unwrap_or(0)];
-        let fname_playlist_audio = format!("{}.f{}.m3u8", fname_without_ext, audio.id);
-        let fname_playlist_video = format!("{}.f{}.m3u8", fname_without_ext, video.id);
+        let path_playlist_audio = replace_extension(fname, &format!("f{}.m3u8", audio.id));
+        let path_playlist_video = replace_extension(fname, &format!("f{}.m3u8", video.id));
+        let (fname_playlist_audio, fname_playlist_video) = (
+            Path::new(&path_playlist_audio)
+                .file_name()
+                .unwrap()
+                .to_string_lossy(),
+            Path::new(&path_playlist_video)
+                .file_name()
+                .unwrap()
+                .to_string_lossy(),
+        );
 
         // Write the header
         file.write_all(
@@ -85,8 +100,8 @@ impl IndexPlaylist {
 
         let dur = Duration::from_millis(manifest.segment_duration as u64);
         let (playlist_audio, playlist_video) = try_join!(
-            LivePlaylist::new(&fname_playlist_audio, dur),
-            LivePlaylist::new(&fname_playlist_video, dur),
+            LivePlaylist::new(&path_playlist_audio, dur),
+            LivePlaylist::new(&path_playlist_video, dur),
         )?;
 
         Ok(Self {

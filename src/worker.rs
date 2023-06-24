@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use futures::{stream::FuturesOrdered, try_join, StreamExt};
 
 use crate::{dash, hls, player_response, util};
@@ -15,6 +17,7 @@ pub enum WorkerError {
 pub async fn start(
     client: &util::HttpClient,
     ipr: &player_response::InitialPlayerResponse,
+    workdir: &Path,
 ) -> Result<(), WorkerError> {
     let manifest = ipr
         .get_dash_representations(&client)
@@ -24,7 +27,7 @@ pub async fn start(
     let (tx_seq, rx_seq) = tokio::sync::mpsc::unbounded_channel();
     try_join!(
         thread_seq(&client, &tx_seq, &ipr),
-        thread_download(&client, rx_seq, &manifest, 4)
+        thread_download(&client, rx_seq, &manifest, workdir, 4)
     )
     .map(|_| ())
 }
@@ -79,6 +82,7 @@ async fn thread_download(
     client: &util::HttpClient,
     rx_seq: tokio::sync::mpsc::UnboundedReceiver<i64>,
     manifest: &dash::Manifest,
+    workdir: &Path,
     concurrency: usize,
 ) -> Result<(), WorkerError> {
     // Get the highest quality audio
@@ -120,9 +124,11 @@ async fn thread_download(
 
     // Write the m3u8 file
     let segment_duration = std::time::Duration::from_millis(manifest.segment_duration as u64);
-    let mut playlist = hls::IndexPlaylist::new("index.m3u8", &manifest, &audio, &video)
-        .await
-        .map_err(WorkerError::IoError)?;
+    let playlist_path = workdir.join("index.m3u8");
+    let mut playlist =
+        hls::IndexPlaylist::new(&playlist_path.to_string_lossy(), &manifest, &audio, &video)
+            .await
+            .map_err(WorkerError::IoError)?;
 
     let mut tasks = FuturesOrdered::new();
     let mut seq_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx_seq);
@@ -132,9 +138,9 @@ async fn thread_download(
         // Start new downloads if we have room
         while tasks.len() < concurrency && !is_done {
             match seq_stream.next().await {
-                Some(seq) => {
-                    tasks.push_back(util::download_av_segment(&client, &audio, &video, seq))
-                }
+                Some(seq) => tasks.push_back(util::download_av_segment(
+                    &client, workdir, &audio, &video, seq,
+                )),
                 None => {
                     is_done = true;
                     break;

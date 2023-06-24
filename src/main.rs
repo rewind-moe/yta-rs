@@ -30,7 +30,22 @@ async fn main() {
         return;
     }
 
-    worker::start(&client, &ipr)
+    // Create a working directory
+    let workdir = std::path::Path::new("yta_dl");
+    if !workdir.exists() {
+        tokio::fs::create_dir(workdir)
+            .await
+            .expect("Could not create working directory");
+    }
+
+    // Write the index.html file
+    let index_path = workdir.join("index.html");
+    let html = include_bytes!("../resources/index.html");
+    tokio::fs::write(index_path, html)
+        .await
+        .expect("Could not write index.html");
+
+    worker::start(&client, &ipr, workdir)
         .await
         .expect("Worker exited with error");
 
