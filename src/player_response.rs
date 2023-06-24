@@ -154,6 +154,12 @@ pub enum PlayerResponseError {
     NoInitialPlayerResponse,
     #[error("Could not parse initial player response")]
     ParseInitialPlayerResponse(#[from] serde_json::Error),
+    #[error("No DASH manifest URL found")]
+    NoDashManifestURL,
+    #[error("Could not download DASH manifest")]
+    DownloadDashManifestError(#[from] util::DownloadError),
+    #[error("Could not parse DASH manifest")]
+    ParseDashManifestError(#[from] quick_xml::Error),
 }
 
 const IPR_STR: &str = "var ytInitialPlayerResponse =";
@@ -223,18 +229,20 @@ impl InitialPlayerResponse {
     pub async fn get_dash_representations(
         &self,
         client: &util::HttpClient,
-    ) -> Result<dash::Manifest, Box<dyn std::error::Error>> {
+    ) -> Result<dash::Manifest, PlayerResponseError> {
         let dash_url = self
             .streaming_data
             .as_ref()
             .and_then(|sd| sd.dash_manifest_url.as_ref())
-            .ok_or("No DASH manifest URL found")?;
+            .ok_or(PlayerResponseError::NoDashManifestURL)?;
 
         client
             .fetch_text(dash_url)
             .await
-            .map_err(|e| e.into())
-            .and_then(|manifest| dash::parse_manifest(&manifest).map_err(|e| e.into()))
+            .map_err(PlayerResponseError::DownloadDashManifestError)
+            .and_then(|manifest| {
+                dash::parse_manifest(&manifest).map_err(PlayerResponseError::ParseDashManifestError)
+            })
     }
 }
 
