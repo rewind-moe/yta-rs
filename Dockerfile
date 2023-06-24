@@ -1,8 +1,18 @@
 FROM rust:1-alpine AS builder
 
 WORKDIR /usr/src/app
+
+COPY Cargo.toml .
+RUN set -ex; \
+    apk add --no-cache musl-dev; \
+    mkdir src; \
+    echo 'fn main() {}' > src/main.rs; \
+    echo 'fn lib() {}' > src/lib.rs; \
+    cargo build --release; \
+    rm -rf src;
+
 COPY . .
-RUN apk add --no-cache musl-dev && \
+RUN touch src/main.rs src/lib.rs && \
     cargo build --release
 
 FROM alpine:latest
