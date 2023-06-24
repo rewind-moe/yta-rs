@@ -26,11 +26,11 @@ pub async fn start(
 
     let stats = Arc::new(RwLock::new(crate::stats::DownloadStatistics::new()));
     let (tx_seq, rx_seq) = tokio::sync::mpsc::unbounded_channel();
-    try_join!(
-        thread_seq(&client, stats.clone(), &tx_seq, &ipr),
-        thread_download(&client, stats.clone(), rx_seq, &manifest, workdir, 4)
-    )
-    .map(|_| ())
+
+    select! {
+        res = thread_seq(&client, stats.clone(), &tx_seq, &ipr) => { res?; Ok(()) },
+        res = thread_download(&client, stats.clone(), rx_seq, &manifest, workdir, 4) => { res?; Ok(()) },
+    }
 }
 
 async fn thread_seq(
