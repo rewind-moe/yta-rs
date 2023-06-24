@@ -38,19 +38,21 @@ impl HttpClient {
         Ok(HttpClient { client, cookies })
     }
 
-    pub async fn download_file(&self, url: &str, path: &str) -> Result<(), DownloadError> {
+    pub async fn download_file(&self, url: &str, path: &str) -> Result<usize, DownloadError> {
         let temp_path = format!("{}.tmp", path);
         let mut file = File::create(&temp_path).await?;
         let mut resp = self.client.get(url).send().await?;
+        let mut size = 0;
 
         while let Some(chunk) = resp.chunk().await? {
             file.write_all(&chunk).await?;
+            size += chunk.len();
         }
 
         file.flush().await?;
         std::fs::rename(temp_path, path)?;
 
-        Ok(())
+        Ok(size)
     }
 
     pub async fn fetch_text(&self, url: &str) -> Result<String, DownloadError> {
@@ -70,7 +72,7 @@ pub async fn download_av_segment(
     audio: &Representation,
     video: &Representation,
     seq: i64,
-) -> Result<(String, String), DownloadError> {
+) -> Result<(String, String, usize), DownloadError> {
     let (url_audio, url_video) = (audio.get_url(seq), video.get_url(seq));
     let (fname_audio, fname_video) = (
         format!("seq_{:.6}.a{}.mp4", seq, audio.id),
@@ -81,7 +83,7 @@ pub async fn download_av_segment(
         let path_audio = outdir.join(&fname_audio);
         if let Ok(res) = tokio::fs::try_exists(&path_audio).await {
             if res {
-                return Ok(());
+                return Ok(0);
             }
         }
 
@@ -93,7 +95,7 @@ pub async fn download_av_segment(
         let path_video = outdir.join(&fname_video);
         if let Ok(res) = tokio::fs::try_exists(&path_video).await {
             if res {
-                return Ok(());
+                return Ok(0);
             }
         }
 
@@ -101,7 +103,31 @@ pub async fn download_av_segment(
             .download_file(&url_video, &path_video.to_string_lossy())
             .await
     };
-    try_join!(dl_audio, dl_video)?;
+    let (sz_audio, sz_video) = try_join!(dl_audio, dl_video)?;
 
-    Ok((fname_audio, fname_video))
+    Ok((fname_audio, fname_video, sz_audio + sz_video))
+}
+
+pub fn format_bytes(bytes: u64) -> String {
+    let mut bytes = bytes as f64;
+    let mut suffix = "B";
+
+    if bytes > 1024.0 {
+        bytes /= 1024.0;
+        suffix = "KiB";
+    }
+    if bytes > 1024.0 {
+        bytes /= 1024.0;
+        suffix = "MiB";
+    }
+    if bytes > 1024.0 {
+        bytes /= 1024.0;
+        suffix = "GiB";
+    }
+    if bytes > 1024.0 {
+        bytes /= 1024.0;
+        suffix = "TiB";
+    }
+
+    format!("{:.2} {}", bytes, suffix)
 }

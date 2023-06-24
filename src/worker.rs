@@ -1,6 +1,6 @@
-use std::path::Path;
-
 use futures::{stream::FuturesOrdered, try_join, StreamExt};
+use std::{path::Path, sync::Arc};
+use tokio::{select, sync::RwLock};
 
 use crate::{dash, hls, player_response, util};
 
@@ -24,16 +24,18 @@ pub async fn start(
         .await
         .map_err(WorkerError::InitialPlayerResponseError)?;
 
+    let stats = Arc::new(RwLock::new(crate::stats::DownloadStatistics::new()));
     let (tx_seq, rx_seq) = tokio::sync::mpsc::unbounded_channel();
     try_join!(
-        thread_seq(&client, &tx_seq, &ipr),
-        thread_download(&client, rx_seq, &manifest, workdir, 4)
+        thread_seq(&client, stats.clone(), &tx_seq, &ipr),
+        thread_download(&client, stats.clone(), rx_seq, &manifest, workdir, 4)
     )
     .map(|_| ())
 }
 
 async fn thread_seq(
     client: &util::HttpClient,
+    stats: Arc<RwLock<crate::stats::DownloadStatistics>>,
     tx_seq: &tokio::sync::mpsc::UnboundedSender<i64>,
     ipr: &player_response::InitialPlayerResponse,
 ) -> Result<(), WorkerError> {
@@ -50,12 +52,15 @@ async fn thread_seq(
             for s in seq..manifest.latest_segment_number {
                 if seq > 0 {
                     last_seq_time = std::time::Instant::now();
-                    println!("Found new segment {}", s);
                 }
                 if tx_seq.send(s).is_err() {
                     println!("Failed to send segment number to download thread");
                     break 'out;
                 }
+
+                let mut st = stats.write().await;
+                st.segments_total = 1 + s as u64;
+                st.print();
             }
             seq = manifest.latest_segment_number;
         }
@@ -80,6 +85,7 @@ async fn thread_seq(
 
 async fn thread_download(
     client: &util::HttpClient,
+    stats: Arc<RwLock<crate::stats::DownloadStatistics>>,
     rx_seq: tokio::sync::mpsc::UnboundedReceiver<i64>,
     manifest: &dash::Manifest,
     workdir: &Path,
@@ -108,7 +114,7 @@ async fn thread_download(
         .ok_or(WorkerError::MissingRepresentation("video".to_string()))?;
 
     println!(
-        "Video: {}x{} {}fps ({})",
+        "Video: {}x{} {}fps ({}, f{})",
         video.width.ok_or(WorkerError::MissingRepresentation(
             "video width".to_string()
         ))?,
@@ -119,8 +125,14 @@ async fn thread_download(
             "video frame rate".to_string()
         ))?,
         video.codecs,
+        video.id,
     );
-    println!("Audio: {}kbps ({})", audio.bandwidth / 1000, audio.codecs);
+    println!(
+        "Audio: {}kbps ({}, f{})",
+        audio.bandwidth / 1000,
+        audio.codecs,
+        audio.id
+    );
 
     // Write the m3u8 file
     let segment_duration = std::time::Duration::from_millis(manifest.segment_duration as u64);
@@ -137,12 +149,20 @@ async fn thread_download(
     loop {
         // Start new downloads if we have room
         while tasks.len() < concurrency && !is_done {
-            match seq_stream.next().await {
-                Some(seq) => tasks.push_back(util::download_av_segment(
-                    &client, workdir, &audio, &video, seq,
-                )),
-                None => {
-                    is_done = true;
+            select! {
+                seq = seq_stream.next() => {
+                    match seq {
+                        Some(seq) => tasks.push_back(util::download_av_segment(
+                            &client, workdir, &audio, &video, seq,
+                        )),
+                        None => {
+                            is_done = true;
+                            break;
+                        }
+                    }
+                },
+                // If no new segments are available after 100ms, continue
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
                     break;
                 }
             }
@@ -155,7 +175,7 @@ async fn thread_download(
 
         // Write finished segments to playlist file
         match tasks.next().await {
-            Some(Ok((fname_audio, fname_video))) => {
+            Some(Ok((fname_audio, fname_video, size_total))) => {
                 playlist
                     .playlist_audio
                     .add_segment(&fname_audio, segment_duration)
@@ -166,6 +186,11 @@ async fn thread_download(
                     .add_segment(&fname_video, segment_duration)
                     .await
                     .map_err(WorkerError::IoError)?;
+
+                let mut st = stats.write().await;
+                st.segments_downloaded += 1;
+                st.bytes_downloaded += size_total as u64;
+                st.print();
             }
             Some(Err(e)) => {
                 println!("Could not download segment: {}", e);
