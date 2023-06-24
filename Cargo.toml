@@ -31,6 +31,7 @@ reqwest-retry = "0.2.2"
 reqwest-middleware = "0.2.2"
 futures = "0.3.28"
 tokio-stream = "0.1.14"
+env_logger = "0.10.0"
 
 [profile.release]
 lto = true

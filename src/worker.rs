@@ -1,4 +1,4 @@
-use futures::{stream::FuturesOrdered, try_join, StreamExt};
+use futures::{join, stream::FuturesOrdered, try_join, StreamExt};
 use std::{path::Path, sync::Arc};
 use tokio::{select, sync::RwLock};
 
@@ -12,6 +12,10 @@ pub enum WorkerError {
     MissingRepresentation(String),
     #[error("I/O error")]
     IoError(#[from] std::io::Error),
+    #[error("Download error")]
+    DownloadError(#[from] util::DownloadError),
+    #[error("No thumbnail found")]
+    NoThumbnail,
 }
 
 pub async fn start(
@@ -19,10 +23,15 @@ pub async fn start(
     ipr: &player_response::InitialPlayerResponse,
     workdir: &Path,
 ) -> Result<(), WorkerError> {
-    let manifest = ipr
-        .get_dash_representations(&client)
-        .await
-        .map_err(WorkerError::InitialPlayerResponseError)?;
+    let (manifest, thumbnail) = join!(
+        ipr.get_dash_representations(&client),
+        thumbnail_dl(&client, &ipr, workdir),
+    );
+
+    let manifest = manifest?;
+    if let Err(e) = thumbnail {
+        warn!("Could not download thumbnail: {}", e);
+    }
 
     let stats = Arc::new(RwLock::new(crate::stats::DownloadStatistics::new()));
     let (tx_seq, rx_seq) = tokio::sync::mpsc::unbounded_channel();
@@ -31,6 +40,38 @@ pub async fn start(
         thread_seq(&client, stats.clone(), tx_seq, &ipr),
         thread_download(&client, stats.clone(), rx_seq, &manifest, workdir, 4),
     )?;
+
+    Ok(())
+}
+
+async fn thumbnail_dl(
+    client: &util::HttpClient,
+    ipr: &player_response::InitialPlayerResponse,
+    workdir: &Path,
+) -> Result<(), WorkerError> {
+    let url = || -> Option<String> {
+        Some(
+            ipr.microformat
+                .as_ref()?
+                .player_microformat_renderer
+                .thumbnail
+                .thumbnails
+                .last()?
+                .url
+                .clone(),
+        )
+    }()
+    .ok_or(WorkerError::NoThumbnail)?;
+
+    let fname = workdir.join("thumbnail.jpg");
+    let fname = fname.to_string_lossy();
+
+    client
+        .download_file(&url, &fname)
+        .await
+        .map_err(WorkerError::DownloadError)?;
+
+    info!("Thumbnail saved to {}", fname);
 
     Ok(())
 }
@@ -56,7 +97,7 @@ async fn thread_seq(
                     last_seq_time = std::time::Instant::now();
                 }
                 if tx_seq.send(s).is_err() {
-                    println!("Failed to send segment number to download thread");
+                    error!("Failed to send segment number to download thread");
                     break 'out;
                 }
 
@@ -68,19 +109,19 @@ async fn thread_seq(
         }
 
         if !ipr.is_usable() {
-            println!("Video is no longer live");
+            info!("Video is no longer live");
             break;
         }
 
         if last_seq_time.elapsed().as_secs() > 30 {
-            println!("No new segments found for 30 seconds, stopping");
+            warn!("No new segments found for 30 seconds, stopping");
             break;
         }
 
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 
-    println!("Sequence thread exited");
+    debug!("Sequence thread exited");
 
     Ok(())
 }
@@ -115,7 +156,7 @@ async fn thread_download(
         .last()
         .ok_or(WorkerError::MissingRepresentation("video".to_string()))?;
 
-    println!(
+    info!(
         "Video: {}x{} {}fps ({}, f{})",
         video.width.ok_or(WorkerError::MissingRepresentation(
             "video width".to_string()
@@ -129,7 +170,7 @@ async fn thread_download(
         video.codecs,
         video.id,
     );
-    println!(
+    info!(
         "Audio: {}kbps ({}, f{})",
         audio.bandwidth / 1000,
         audio.codecs,
@@ -189,7 +230,7 @@ async fn thread_download(
                 st.print();
             }
             Some(Err(e)) => {
-                println!("Could not download segment: {}", e);
+                error!("Could not download segment: {}", e);
             }
             None => (),
         }

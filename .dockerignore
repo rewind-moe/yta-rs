@@ -1,3 +1,7 @@
 /target
 /yta_dl
 Cargo.lock
+Dockerfile
+*.mp4
+*.ts
+*.m3u8

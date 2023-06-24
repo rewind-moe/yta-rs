@@ -1,3 +1,6 @@
 /target
 /yta_dl
 Cargo.lock
+*.mp4
+*.ts
+*.m3u8

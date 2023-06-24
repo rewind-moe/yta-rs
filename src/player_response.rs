@@ -89,7 +89,7 @@ pub struct StreamingData {
 #[serde(rename_all = "camelCase")]
 pub struct AdaptiveFormat {
     pub itag: i64,
-    pub url: String,
+    pub url: Option<String>,
     pub mime_type: String,
     pub bitrate: i64,
     pub target_duration_sec: Option<f64>,
@@ -230,7 +230,10 @@ impl InitialPlayerResponse {
                 .as_ref()?
                 .adaptive_formats
                 .iter()
-                .map(|af| (af.itag, af.url.clone()))
+                .filter_map(|af| match af.url {
+                    Some(ref url) => Some((af.itag, url.clone())),
+                    None => None,
+                })
                 .collect(),
         )
     }

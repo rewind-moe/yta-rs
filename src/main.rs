@@ -1,8 +1,11 @@
+#[macro_use]
+extern crate log;
+
 use tokio::{
     select,
     signal::unix::{signal, SignalKind},
 };
-use yta_rs::{player_response::InitialPlayerResponse, util, worker};
+use yta_rs::{ffmpeg, player_response::InitialPlayerResponse, util, worker};
 
 #[derive(thiserror::Error, Debug)]
 enum RunError {
@@ -10,37 +13,40 @@ enum RunError {
     SignalInterrupt(#[from] std::io::Error),
     #[error("Worker error")]
     WorkerError(#[from] worker::WorkerError),
+    #[error("Mux error")]
+    MuxError(#[from] ffmpeg::FfmpegError),
     #[error("Error")]
     Error(String, Box<dyn std::error::Error>),
 }
 
 async fn run(url: String) -> Result<(), RunError> {
+    // Initialize env_logger
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+
     // Create HttpClient
     let client = util::HttpClient::new().expect("Could not create HttpClient");
 
     // Fetch the URL
-    println!("Fetching {}", url);
-    let html = reqwest::get(&url)
+    info!("Fetching {}", url);
+    let html = client
+        .fetch_text(&url)
         .await
-        .map_err(|e| RunError::Error("Could not fetch URL".to_string(), Box::new(e)))?
-        .text()
-        .await
-        .map_err(|e| RunError::Error("Could not read response".to_string(), Box::new(e)))?;
+        .map_err(|e| RunError::Error("Could not fetch URL".to_string(), Box::new(e)))?;
 
     // Parse the HTML
-    println!("Parsing initial player response");
+    info!("Parsing initial player response");
     let ipr =
         InitialPlayerResponse::from_html(html.as_str()).expect("Could not parse player response");
 
     // Check if is live
     if ipr.is_usable() {
-        println!("Video is live");
+        info!("Video is live");
         ipr.video_details.as_ref().map(|v| {
-            println!("[*] Title  : {}", v.title);
-            println!("[*] Channel: {}", v.author);
+            info!("[*] Title  : {}", v.title);
+            info!("[*] Channel: {}", v.author);
         });
     } else {
-        println!("Video is not live");
+        error!("Video is not live");
         return Ok(());
     }
 
@@ -64,7 +70,14 @@ async fn run(url: String) -> Result<(), RunError> {
 
     worker::start(&client, &ipr, workdir)
         .await
-        .map_err(RunError::WorkerError)
+        .map_err(RunError::WorkerError)?;
+
+    // Mux the video
+    let in_m3u8 = workdir.join("index.m3u8");
+    let out_mp4 = workdir.join("video.mp4");
+    ffmpeg::mux(&in_m3u8, &out_mp4)
+        .await
+        .map_err(RunError::MuxError)
 }
 
 #[tokio::main]
@@ -79,8 +92,8 @@ async fn main() {
         let mut sigint = signal(SignalKind::interrupt()).unwrap();
         loop {
             select! {
-                _ = sigterm.recv() => println!("Recieve SIGTERM"),
-                _ = sigint.recv() => println!("Recieve SIGTERM"),
+                _ = sigterm.recv() => info!("Recieve SIGTERM"),
+                _ = sigint.recv() => info!("Recieve SIGTERM"),
             };
             stop_tx.send(()).unwrap();
         }
@@ -91,19 +104,19 @@ async fn main() {
             biased;
 
             _ = stop_rx.changed() => {
-                println!("Stop signal recieved");
+                info!("Stop signal recieved");
                 break;
             },
             res = run(url) => {
-                println!("Worker process exited");
+                info!("Worker process exited");
                 if let Err(e) = res {
-                    println!("Worker error: {:#?}", e);
+                    error!("Worker error: {:#?}", e);
                     std::process::exit(1);
                 }
                 break;
             },
             _ = signal_process => {
-                println!("Signal process exited");
+                warn!("Signal process exited");
                 std::process::exit(1);
             },
         }
