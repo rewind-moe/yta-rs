@@ -45,6 +45,10 @@ impl LivePlaylist {
             )
             .await
     }
+
+    pub async fn finish(&mut self) -> io::Result<()> {
+        self.file.write_all(b"#EXT-X-ENDLIST\n").await
+    }
 }
 
 pub struct IndexPlaylist {
@@ -108,5 +112,25 @@ impl IndexPlaylist {
             playlist_audio,
             playlist_video,
         })
+    }
+
+    pub async fn add_segment(
+        &mut self,
+        fname_audio: &str,
+        fname_video: &str,
+        segment_duration: Duration,
+    ) -> io::Result<()> {
+        try_join!(
+            self.playlist_audio
+                .add_segment(fname_audio, segment_duration),
+            self.playlist_video
+                .add_segment(fname_video, segment_duration),
+        )?;
+        Ok(())
+    }
+
+    pub async fn finish(&mut self) -> io::Result<()> {
+        try_join!(self.playlist_audio.finish(), self.playlist_video.finish())?;
+        Ok(())
     }
 }

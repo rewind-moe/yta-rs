@@ -27,16 +27,18 @@ pub async fn start(
     let stats = Arc::new(RwLock::new(crate::stats::DownloadStatistics::new()));
     let (tx_seq, rx_seq) = tokio::sync::mpsc::unbounded_channel();
 
-    select! {
-        res = thread_seq(&client, stats.clone(), &tx_seq, &ipr) => { res?; Ok(()) },
-        res = thread_download(&client, stats.clone(), rx_seq, &manifest, workdir, 4) => { res?; Ok(()) },
-    }
+    try_join!(
+        thread_seq(&client, stats.clone(), tx_seq, &ipr),
+        thread_download(&client, stats.clone(), rx_seq, &manifest, workdir, 4),
+    )?;
+
+    Ok(())
 }
 
 async fn thread_seq(
     client: &util::HttpClient,
     stats: Arc<RwLock<crate::stats::DownloadStatistics>>,
-    tx_seq: &tokio::sync::mpsc::UnboundedSender<i64>,
+    tx_seq: tokio::sync::mpsc::UnboundedSender<i64>,
     ipr: &player_response::InitialPlayerResponse,
 ) -> Result<(), WorkerError> {
     let mut seq = 0;
@@ -161,8 +163,8 @@ async fn thread_download(
                         }
                     }
                 },
-                // If no new segments are available after 100ms, continue
-                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                // If no new segments are available after 1ms, continue
+                _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {
                     break;
                 }
             }
@@ -177,13 +179,7 @@ async fn thread_download(
         match tasks.next().await {
             Some(Ok((fname_audio, fname_video, size_total))) => {
                 playlist
-                    .playlist_audio
-                    .add_segment(&fname_audio, segment_duration)
-                    .await
-                    .map_err(WorkerError::IoError)?;
-                playlist
-                    .playlist_video
-                    .add_segment(&fname_video, segment_duration)
+                    .add_segment(&fname_audio, &fname_video, segment_duration)
                     .await
                     .map_err(WorkerError::IoError)?;
 
@@ -198,6 +194,9 @@ async fn thread_download(
             None => (),
         }
     }
+
+    // Close the playlist
+    playlist.finish().await.map_err(WorkerError::IoError)?;
 
     Ok(())
 }
