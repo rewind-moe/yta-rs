@@ -1,9 +1,7 @@
 use tokio::{
     select,
     signal::unix::{signal, SignalKind},
-    try_join,
 };
-#[forbid(unsafe_code)]
 use yta_rs::{player_response::InitialPlayerResponse, util, worker};
 
 #[derive(thiserror::Error, Debug)]
