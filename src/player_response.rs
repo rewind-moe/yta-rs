@@ -174,17 +174,15 @@ fn get_ipr_str(html: &str) -> Option<&str> {
     Some(&html[idx_start..idx_end])
 }
 
-pub fn get_initial_player_response(
-    html: &str,
-) -> Result<InitialPlayerResponse, PlayerResponseError> {
-    // Find the initial player response
-    let ipr_str = get_ipr_str(html).ok_or(PlayerResponseError::NoInitialPlayerResponse)?;
-
-    // Parse the JSON
-    serde_json::from_str(ipr_str).map_err(PlayerResponseError::ParseInitialPlayerResponse)
-}
-
 impl InitialPlayerResponse {
+    pub fn from_html(html: &str) -> Result<Self, PlayerResponseError> {
+        // Find the initial player response
+        let ipr_str = get_ipr_str(html).ok_or(PlayerResponseError::NoInitialPlayerResponse)?;
+
+        // Parse the JSON
+        serde_json::from_str(ipr_str).map_err(PlayerResponseError::ParseInitialPlayerResponse)
+    }
+
     pub fn is_usable(&self) -> bool {
         self.video_details.video_id != ""
             && self
@@ -272,7 +270,7 @@ mod tests {
     #[test]
     fn ipr_live() {
         let html = get_test_html("watchpage_live.html");
-        let ipr = get_initial_player_response(&html).expect("Could not parse IPR");
+        let ipr = InitialPlayerResponse::from_html(&html).expect("Could not parse IPR");
 
         assert_eq!(ipr.video_details.is_live, true, "Video is not live");
         assert_eq!(ipr.video_details.length_seconds, 0, "Video length is not 0");
@@ -294,7 +292,7 @@ mod tests {
     #[test]
     fn ipr_scheduled() {
         let html = get_test_html("watchpage_scheduled.html");
-        let ipr = get_initial_player_response(&html).expect("Could not parse IPR");
+        let ipr = InitialPlayerResponse::from_html(&html).expect("Could not parse IPR");
 
         assert_eq!(ipr.video_details.is_live, false, "Video is live");
         assert_eq!(

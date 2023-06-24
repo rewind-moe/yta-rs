@@ -1,6 +1,6 @@
-use futures::stream::StreamExt;
-use tokio::try_join;
-use yta_rs::{dash, player_response, util};
+use futures::stream::{FuturesOrdered, StreamExt};
+use tokio::{io::AsyncWriteExt, try_join};
+use yta_rs::{dash, hls, player_response::InitialPlayerResponse, util};
 
 #[tokio::main]
 async fn main() {
@@ -21,8 +21,8 @@ async fn main() {
 
     // Parse the HTML
     println!("Parsing initial player response");
-    let ipr = player_response::get_initial_player_response(html.as_str())
-        .expect("Could not parse player response");
+    let ipr =
+        InitialPlayerResponse::from_html(html.as_str()).expect("Could not parse player response");
     println!("Got initial player response: {:#?}", ipr);
 
     // Check if is live
@@ -30,6 +30,7 @@ async fn main() {
         println!("Video is live");
     } else {
         println!("Video is not live");
+        return;
     }
 
     // Get the download URLs
@@ -43,18 +44,22 @@ async fn main() {
     let (tx_seq, rx_seq) = tokio::sync::mpsc::unbounded_channel();
 
     try_join!(
-        thread_seq(tx_seq, &client, &ipr),
-        thread_download(rx_seq, &client, &manifest, 4)
+        thread_seq(&client, &tx_seq, &ipr),
+        thread_download(&client, rx_seq, &manifest, 4)
     )
     .expect("Tasks exited with error");
+
+    println!("Done");
 }
 
 async fn thread_seq(
-    tx_seq: tokio::sync::mpsc::UnboundedSender<i64>,
     client: &util::HttpClient,
-    ipr: &player_response::InitialPlayerResponse,
+    tx_seq: &tokio::sync::mpsc::UnboundedSender<i64>,
+    ipr: &InitialPlayerResponse,
 ) -> Result<(), ()> {
     let mut seq = 0;
+    let mut last_seq_time = std::time::Instant::now();
+
     loop {
         let manifest = ipr
             .get_dash_representations(&client)
@@ -64,6 +69,7 @@ async fn thread_seq(
         if manifest.latest_segment_number > seq {
             for s in seq..manifest.latest_segment_number {
                 if seq > 0 {
+                    last_seq_time = std::time::Instant::now();
                     println!("Found new segment {}", s);
                 }
                 tx_seq.send(s).unwrap();
@@ -76,14 +82,19 @@ async fn thread_seq(
             break;
         }
 
+        if last_seq_time.elapsed().as_secs() > 30 {
+            println!("No new segments found for 30 seconds, stopping");
+            break;
+        }
+
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
     Ok(())
 }
 
 async fn thread_download(
-    rx_seq: tokio::sync::mpsc::UnboundedReceiver<i64>,
     client: &util::HttpClient,
+    rx_seq: tokio::sync::mpsc::UnboundedReceiver<i64>,
     manifest: &dash::Manifest,
     concurrency: usize,
 ) -> Result<(), ()> {
@@ -105,20 +116,64 @@ async fn thread_download(
     video.sort_by(|a, b| a.bandwidth.cmp(&b.bandwidth));
     let video = *video.last().expect("Could not find video representation");
 
-    let rx_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx_seq);
+    println!(
+        "Video: {}x{} {}fps ({})",
+        video.width.unwrap(),
+        video.height.unwrap(),
+        video.frame_rate.unwrap(),
+        video.codecs,
+    );
+    println!("Audio: {}kbps ({})", audio.bandwidth / 1000, audio.codecs);
 
-    rx_stream
-        .for_each_concurrent(concurrency, |seq| async move {
-            let url_audio = audio.get_url(seq);
-            let url_video = video.get_url(seq);
-            println!("Downloading segment {}", seq);
+    // Write the m3u8 file
+    let segment_duration = std::time::Duration::from_millis(manifest.segment_duration as u64);
+    let mut playlist = hls::IndexPlaylist::new("index.m3u8", &manifest, &audio, &video)
+        .await
+        .expect("Could not create playlist file");
 
-            let fname = format!("seq_{:06}.ts", seq);
-            util::download_and_merge_segment(&client, &url_audio, &url_video, &fname)
-                .await
-                .expect("Could not download segment");
-        })
-        .await;
+    let mut tasks = FuturesOrdered::new();
+    let mut seq_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx_seq);
+    let mut is_done = false;
+
+    loop {
+        // Start new downloads if we have room
+        while tasks.len() < concurrency && !is_done {
+            match seq_stream.next().await {
+                Some(seq) => {
+                    tasks.push_back(util::download_av_segment(&client, &audio, &video, seq))
+                }
+                None => {
+                    is_done = true;
+                    break;
+                }
+            }
+        }
+
+        // Exit if there's nothing left to do
+        if tasks.is_empty() && is_done {
+            break;
+        }
+
+        // Write finished segments to playlist file
+        match tasks.next().await {
+            Some(Ok((fname_audio, fname_video))) => {
+                playlist
+                    .playlist_audio
+                    .add_segment(&fname_audio, segment_duration)
+                    .await
+                    .expect("Could not write playlist file");
+                playlist
+                    .playlist_video
+                    .add_segment(&fname_video, segment_duration)
+                    .await
+                    .expect("Could not write playlist file");
+            }
+            Some(Err(e)) => {
+                println!("Could not download segment: {}", e);
+            }
+            None => (),
+        }
+    }
 
     Ok(())
 }

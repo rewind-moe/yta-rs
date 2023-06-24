@@ -83,7 +83,6 @@ pub fn parse_manifest(manifest: &str) -> Result<Manifest, quick_xml::Error> {
     let mut reader = Reader::from_str(manifest);
     reader.trim_text(true);
 
-    let mut n_segments_in_manifest = 0;
     let mut m = Manifest {
         segment_duration: 0.0,
         latest_segment_number: 0,
@@ -97,14 +96,14 @@ pub fn parse_manifest(manifest: &str) -> Result<Manifest, quick_xml::Error> {
             Ok(Event::Empty(e)) => match e.name().as_ref() {
                 b"S" => {
                     m.segment_duration = get_attr(&e, "d").ok_or(quick_xml::Error::TextNotFound)?;
-                    n_segments_in_manifest += 1;
+                    m.latest_segment_number += 1;
                 }
                 _ => (),
             },
             Ok(Event::Start(e)) => match e.name().as_ref() {
                 b"SegmentList" => {
-                    m.latest_segment_number = get_attr(&e, "startNumber")
-                        .map(|n: i64| n + n_segments_in_manifest - 1)
+                    m.latest_segment_number = get_attr::<i64>(&e, "startNumber")
+                        .map(|n: i64| n - 1)
                         .ok_or(quick_xml::Error::TextNotFound)?;
                 }
                 b"Representation" => {

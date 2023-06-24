@@ -5,6 +5,8 @@ use reqwest_middleware::ClientWithMiddleware;
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use tokio::{fs::File, io::AsyncWriteExt, try_join};
 
+use crate::dash::Representation;
+
 pub struct HttpClient {
     pub client: ClientWithMiddleware,
     pub cookies: Arc<CookieStoreMutex>,
@@ -62,47 +64,37 @@ impl HttpClient {
     }
 }
 
-pub async fn download_and_merge_segment(
+pub async fn download_av_segment(
     client: &HttpClient,
-    url_audio: &str,
-    url_video: &str,
-    path: &str,
-) -> Result<(), DownloadError> {
-    let fname_audio = format!("{}.audio.fmp4", path);
-    let fname_video = format!("{}.video.fmp4", path);
+    audio: &Representation,
+    video: &Representation,
+    seq: i64,
+) -> Result<(String, String), DownloadError> {
+    let (url_audio, url_video) = (audio.get_url(seq), video.get_url(seq));
+    let (fname_audio, fname_video) = (
+        format!("seq_{}.a{}.mp4", seq, audio.id),
+        format!("seq_{}.v{}.mp4", seq, video.id),
+    );
 
-    try_join!(
-        client.download_file(url_audio, &fname_audio),
-        client.download_file(url_video, &fname_video),
-    )?;
+    let dl_audio = async {
+        if let Ok(res) = tokio::fs::try_exists(&fname_audio).await {
+            if res {
+                return Ok(());
+            }
+        }
 
-    let mut ffmpeg = tokio::process::Command::new("ffmpeg");
-    ffmpeg
-        .arg("-hide_banner")
-        .arg("-y")
-        .arg("-i")
-        .arg(&fname_audio)
-        .arg("-i")
-        .arg(&fname_video)
-        .arg("-c")
-        .arg("copy")
-        .arg("-f")
-        .arg("mpegts")
-        .arg(path);
-    ffmpeg.stdin(std::process::Stdio::null());
+        client.download_file(&url_audio, &fname_audio).await
+    };
+    let dl_video = async {
+        if let Ok(res) = tokio::fs::try_exists(&fname_video).await {
+            if res {
+                return Ok(());
+            }
+        }
 
-    let out = ffmpeg.output().await?;
-    if !out.status.success() {
-        return Err(DownloadError::IoError(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("ffmpeg failed: {:?}", out),
-        )));
-    }
+        client.download_file(&url_video, &fname_video).await
+    };
+    try_join!(dl_audio, dl_video)?;
 
-    try_join!(
-        tokio::fs::remove_file(&fname_audio),
-        tokio::fs::remove_file(&fname_video),
-    )?;
-
-    Ok(())
+    Ok((fname_audio, fname_video))
 }
