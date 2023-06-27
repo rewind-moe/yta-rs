@@ -3,6 +3,9 @@
 Minimal implementation of
 [Kethsar/ytarchive](https://github.com/Kethsar/ytarchive) in Rust.
 
+⚠️ This crate is still very new. The API is not yet finalized and may change at
+any moment. Use at your own discretion.
+
 ## Usage
 
 This crate is meant to be used as a library. Currently, the executable only has

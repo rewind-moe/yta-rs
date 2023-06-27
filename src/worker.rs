@@ -1,6 +1,7 @@
 use futures::{join, stream::FuturesOrdered, try_join, StreamExt};
 use std::{path::Path, sync::Arc};
 use tokio::{select, sync::RwLock};
+use tokio_retry::Retry;
 
 use crate::{dash, hls, player_response, util};
 
@@ -85,11 +86,16 @@ async fn thread_seq(
     let mut seq = 0;
     let mut last_seq_time = std::time::Instant::now();
 
+    let retry_strategy = tokio_retry::strategy::ExponentialBackoff::from_millis(200)
+        .map(tokio_retry::strategy::jitter)
+        .take(5);
+
     'out: loop {
-        let manifest = ipr
-            .get_dash_representations(&client)
-            .await
-            .map_err(WorkerError::InitialPlayerResponseError)?;
+        let manifest = Retry::spawn(retry_strategy.clone(), || {
+            ipr.get_dash_representations(&client)
+        })
+        .await
+        .map_err(WorkerError::InitialPlayerResponseError)?;
 
         if manifest.latest_segment_number > seq {
             for s in seq..manifest.latest_segment_number {

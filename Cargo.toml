@@ -1,6 +1,9 @@
 [package]
 name = "yta-rs"
-version = "0.1.0"
+description = "Helper crate to download YouTube live streams"
+license = "MIT"
+keywords = ["youtube-dl", "livestream", "download"]
+version = "0.0.1"
 edition = "2021"
 
 [lib]
@@ -32,6 +35,7 @@ reqwest-middleware = "0.2.2"
 futures = "0.3.28"
 tokio-stream = "0.1.14"
 env_logger = "0.10.0"
+tokio-retry = "0.3.0"
 
 [profile.release]
 lto = true

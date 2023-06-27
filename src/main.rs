@@ -74,8 +74,27 @@ async fn run(url: String) -> Result<(), RunError> {
 
     // Mux the video
     let in_m3u8 = workdir.join("index.m3u8");
+    let thumbnail = workdir.join("thumbnail.jpg");
     let out_mp4 = workdir.join("video.mp4");
-    ffmpeg::mux(&in_m3u8, &out_mp4)
+    let meta = ffmpeg::Metadata {
+        title: ipr.video_details.as_ref().map(|v| v.title.clone()),
+        video_id: ipr.video_details.as_ref().map(|v| v.video_id.clone()),
+        date: ipr
+            .microformat
+            .as_ref()
+            .map(|m| m.player_microformat_renderer.publish_date.clone()),
+        description: ipr
+            .video_details
+            .as_ref()
+            .map(|v| v.short_description.clone()),
+        thumbnail: if thumbnail.exists() {
+            Some(thumbnail)
+        } else {
+            None
+        },
+        faststart: true,
+    };
+    ffmpeg::mux(&in_m3u8, &meta, &out_mp4)
         .await
         .map_err(RunError::MuxError)
 }
